@@ -1,85 +1,81 @@
-# Face Recognition — OpenCV
+# Face Recognition — reconhecimento local com OpenCV
 
 ![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)
-![OpenCV](https://img.shields.io/badge/OpenCV-4.10-5C3EE8?logo=opencv&logoColor=white)
-![NumPy](https://img.shields.io/badge/NumPy-1.26-013243?logo=numpy&logoColor=white)
+![OpenCV](https://img.shields.io/badge/OpenCV-4.10.0.84-5C3EE8?logo=opencv&logoColor=white)
+![NumPy](https://img.shields.io/badge/NumPy-1.26+-013243?logo=numpy&logoColor=white)
+![PyYAML](https://img.shields.io/badge/PyYAML-6+-CB171E?logo=yaml&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-python%3A3.11--slim-2496ED?logo=docker&logoColor=white)
 
-Reconhecimento facial local: a câmera encontra o rosto, compara com as pessoas cadastradas e mostra o nome em cima da imagem.
+A câmera, ou um arquivo de imagem, passa por um cascade Haar frontal. O recorte é reduzido a 100×100 em cinza, normalizado, e comparado por cosseno com o que foi gravado a partir de `images/<pessoa>/`. Abaixo do limiar 0,72 o nome é `Desconhecido`. Serve para um ensaio local. Não é identificação em escala.
 
-## Por que separar em duas etapas?
-
-| Etapa | Módulo | Motivo |
+| Etapa | Código | Limite |
 | --- | --- | --- |
-| Achar o rosto | `face_detector.py` | Recorte fixo, cascade Haar do OpenCV, sem treino |
-| Dizer quem é | `recognizer.py` | Compara o recorte com as fotos de `images/<pessoa>/` |
+| Achar o rosto | `haarcascade_frontalface_default`, `scale` 1,1, `minNeighbors` 5, `minSize` 60×60 | só frontal; perfil e rosto pequeno passam batido |
+| Dizer quem é | vetor do recorte contra a matriz de cada pessoa | no treino, `train_from_dir` embute a foto inteira, não o recorte do rosto; na hora de identificar, o vetor é só do retângulo detectado |
 
-`app.py` junta as duas: detecta, identifica e desenha o retângulo. Sem rosto cadastrado, o nome fica **Desconhecido**.
+O pacote pinado é `opencv-python-headless`. `cv2.imshow` não vem nessa build: `python src/app.py` (câmera) quebra na janela. `--train` e `--image` não precisam de GUI.
 
 ## Stack
 
-- **OpenCV** para a câmera, o cascade Haar e o desenho
-- **NumPy** para o vetor de cada rosto e a comparação
-- **PyYAML** para câmera, limiar e caminhos em `config.yaml`
+- Python 3.11 no `Dockerfile` (`python:3.11-slim`)
+- opencv-python-headless 4.10.0.84
+- NumPy >= 1.26 e PyYAML >= 6
+- `config.yaml`: `camera_index` 0, `threshold` 0.72, `known_dir` `images`, `model_path` `models/known.npz`
 
 ## Estrutura
 
 ```
-src/
-├── app.py              # câmera, imagem avulsa e treino
-├── face_detector.py    # encontra o rosto
-├── recognizer.py       # compara com os cadastros
-└── utils.py            # config e desenho
-images/<pessoa>/        # fotos de treino, uma pasta por pessoa
-models/                 # encodings gerados pelo --train
-config.yaml             # limiar, câmera e caminhos
+.
+├── config.yaml
+├── requirements.txt
+├── Dockerfile              # instala deps e o default é --help
+├── .dockerignore
+├── src/
+│   ├── app.py             # --train, --image ou câmera
+│   ├── face_detector.py   # cascade Haar
+│   ├── recognizer.py      # embedding, limiar, npz
+│   └── utils.py           # YAML e retângulo com o nome
+├── images/.gitkeep        # fotos em images/<pessoa>/*.{jpg,jpeg,png}
+├── models/.gitkeep        # known.npz e known.json saem do --train
+├── data/.gitkeep          # saída padrão data/resultado.jpg
+└── tests/test_pipeline.py # unittest, sem câmera
 ```
+
+`images/`, `models/` e `data/` estão vazios no git. Sem `models/known.npz`, o startup tenta treinar a partir de `images/`. Pasta vazia deixa o reconhecedor sem ninguém e todo rosto sai `Desconhecido`.
 
 ## Como rodar
 
 ```bash
 git clone https://github.com/gabrielteramae/face-recognition.git
 cd face-recognition
-python -m venv venv
-source venv/bin/activate
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
-```
-
-Coloque as fotos em pastas com o nome da pessoa, por exemplo `images/Gabriel/1.jpg` e `images/Gabriel/2.jpg`.
-
-```bash
 python src/app.py --train
-python src/app.py
 python src/app.py --image foto.jpg --output data/resultado.jpg
 ```
 
-Na câmera, `q` fecha. O limiar fica em `config.yaml`: quanto maior, mais exigente o reconhecimento.
+`--train` lê `images/<pessoa>/` e, se achou ao menos uma imagem, grava `models/known.npz` e `models/known.json`. `--image` imprime `nome score` (ou “Nenhum rosto encontrado.”) e salva o JPEG. Sem `--output`, o caminho é `data/resultado.jpg`.
 
-### Docker
-
-A câmera fica na máquina local. O container serve para analisar um arquivo.
+O `Dockerfile` existe. A câmera não entra no container; o `CMD` é `python src/app.py --help`.
 
 ```bash
 docker build -t face-recognition .
 docker run --rm -v "$PWD/images:/app/images" -v "$PWD/foto.jpg:/app/foto.jpg" face-recognition python src/app.py --image foto.jpg
 ```
 
-## Comandos
+## Testes realizados
 
-| Comando | O que faz |
-| --- | --- |
-| `python src/app.py --train` | Lê `images/<pessoa>/` e grava `models/known.npz` |
-| `python src/app.py` | Abre a câmera e escreve o nome em cada rosto |
-| `python src/app.py --image foto.jpg` | Analisa um arquivo e salva `data/resultado.jpg` |
+`tests/test_pipeline.py` usa `unittest` e imagens sintéticas (bloco de cor mais ruído), sem câmera e sem cascade nos três primeiros casos:
 
-## Testes
+- o vetor mais próximo devolve o nome certo quando o score passa de 0,8
+- limiar 0,99 manda um padrão diferente para `Desconhecido`
+- `save` / `load` em `/tmp/known-test.npz` recupera o nome
+- `FaceRecognition.process` numa imagem 480×640 preta devolve lista vazia
 
 ```bash
 python -m unittest tests.test_pipeline -v
 ```
-
-Os testes conferem o reconhecimento do padrão mais próximo, o caso abaixo do limiar, o save/load do modelo e uma imagem sem rosto. Não precisam de câmera.
-
-O reconhecimento usa a aparência do recorte. Serve para um projeto local, não para identificação em escala.
 
 ---
 
